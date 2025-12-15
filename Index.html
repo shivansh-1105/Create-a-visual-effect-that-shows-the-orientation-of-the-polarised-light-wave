@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>3D Polarized Light Visualization</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050505; color: white; font-family: sans-serif; }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px;
+            border-radius: 5px;
+            pointer-events: none;
+        }
+        .controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 5px;
+        }
+        label { display: block; margin-bottom: 5px; font-size: 14px; }
+        input[type=range] { vertical-align: middle; }
+        button {
+            margin-top: 5px;
+            padding: 5px 10px;
+            background: #444;
+            color: white;
+            border: 1px solid #666;
+            cursor: pointer;
+        }
+        button:hover { background: #666; }
+    </style>
+    <!-- Load Three.js from CDN -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="info">
+        <h3>Polarization Visualizer</h3>
+        <p><span style="color:#00ffff">Cyan:</span> Resultant Field (E)</p>
+        <p><span style="color:#ff0055">Red:</span> Vertical Component (Ey)</p>
+        <p><span style="color:#0088ff">Blue:</span> Horizontal Component (Ez)</p>
+    </div>
+
+    <div class="controls">
+        <label>Phase Shift (φ): <span id="phaseVal">0</span>°</label>
+        <input type="range" id="phase" min="0" max="360" step="1" value="0">
+        
+        <label>Amplitude Y (Vert): <span id="ampYVal">1.5</span></label>
+        <input type="range" id="ampY" min="0" max="2" step="0.1" value="1.5">
+
+        <label>Amplitude Z (Horiz): <span id="ampZVal">1.5</span></label>
+        <input type="range" id="ampZ" min="0" max="2" step="0.1" value="1.5">
+        
+        <div style="margin-top:10px; border-top: 1px solid #444; padding-top:10px;">
+            <button onclick="setPreset('linear')">Linear</button>
+            <button onclick="setPreset('circular')">Circular</button>
+            <button onclick="setPreset('elliptical')">Elliptical</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // --- Configuration ---
+        const CONFIG = {
+            waveLength: 10,
+            frequency: 2.0,
+            speed: 3.0,
+            segments: 400,
+            length: 40
+        };
+
+        // State
+        let params = {
+            phaseShift: 0, // Degrees
+            ampY: 1.5,
+            ampZ: 1.5 // Intentionally 0 initially for linear vertical
+        };
+
+        // --- Setup Scene ---
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x050505, 0.02);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(15, 10, 20);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        // --- Helpers ---
+        // Grid
+        const gridHelper = new THREE.GridHelper(50, 50, 0x333333, 0x111111);
+        scene.add(gridHelper);
+
+        // Axis line (Propagation direction)
+        const axisGeo = new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(-CONFIG.length, 0, 0),
+            new THREE.Vector3(CONFIG.length/2, 0, 0)
+        ]);
+        const axisMat = new THREE.LineBasicMaterial({ color: 0x666666, opacity: 0.5, transparent: true });
+        const axisLine = new THREE.Line(axisGeo, axisMat);
+        scene.add(axisLine);
+
+        // --- Wave Objects ---
+        function createWaveLine(color, width = 1) {
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(CONFIG.segments * 3);
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            const material = new THREE.LineBasicMaterial({ color: color, linewidth: width });
+            const line = new THREE.Line(geometry, material);
+            scene.add(line);
+            return { mesh: line, positions: positions };
+        }
+
+        const waveY = createWaveLine(0xff0055); // Vertical Component (Red)
+        const waveZ = createWaveLine(0x0088ff); // Horizontal Component (Blue)
+        const waveResult = createWaveLine(0x00ffff, 2); // Resultant (Cyan)
+
+        // Vectors (Arrows at the leading edge)
+        const arrowOrigin = new THREE.Vector3(0, 0, 0);
+        const arrowLen = 1;
+        const arrowColorY = 0xff0055;
+        const arrowColorZ = 0x0088ff;
+        const arrowColorR = 0x00ffff;
+
+        const arrowHelperY = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), arrowOrigin, arrowLen, arrowColorY);
+        const arrowHelperZ = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), arrowOrigin, arrowLen, arrowColorZ);
+        const arrowHelperR = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 1), arrowOrigin, arrowLen, arrowColorR);
+        
+        // Group arrows to move them along the wave
+        const vectorGroup = new THREE.Group();
+        vectorGroup.add(arrowHelperY);
+        vectorGroup.add(arrowHelperZ);
+        vectorGroup.add(arrowHelperR);
+        scene.add(vectorGroup);
+
+        // --- Projection Plane (The "Screen") ---
+        // A transparent plane that shows the trace of the polarization
+        const planeGeo = new THREE.PlaneGeometry(8, 8);
+        const planeMat = new THREE.MeshBasicMaterial({ 
+            color: 0x222222, 
+            side: THREE.DoubleSide, 
+            transparent: true, 
+            opacity: 0.3,
+            depthWrite: false
+        });
+        const projectionPlane = new THREE.Mesh(planeGeo, planeMat);
+        projectionPlane.rotation.y = Math.PI / 2;
+        projectionPlane.position.x = 5; // Position where we visualize the trace
+        scene.add(projectionPlane);
+
+        // Trace Trail (The shape drawn on the plane)
+        const trailSize = 200;
+        const trailGeo = new THREE.BufferGeometry();
+        const trailPos = new Float32Array(trailSize * 3);
+        trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
+        const trailMat = new THREE.LineBasicMaterial({ color: 0xffff00 });
+        const trailLine = new THREE.Line(trailGeo, trailMat);
+        projectionPlane.add(trailLine); // Add relative to plane
+        // Fix trail rotation since parent is rotated
+        trailLine.rotation.y = -Math.PI / 2; 
+
+        // --- Animation Loop ---
+        const clock = new THREE.Clock();
+        let traceIndex = 0;
+
+        function updateWave(time) {
+            // Convert phase shift to radians
+            const phi = params.phaseShift * (Math.PI / 180);
+            const k = (2 * Math.PI) / CONFIG.waveLength; // Wave number
+            const w = 2 * Math.PI * CONFIG.frequency; // Angular frequency
+
+            // Update entire wave lines
+            for (let i = 0; i < CONFIG.segments; i++) {
+                // x goes from negative to positive
+                const x = -CONFIG.length + (i / CONFIG.segments) * CONFIG.length;
+                
+                // Determine propagation term: (kx - wt)
+                const prop = k * x - w * time;
+
+                // Vertical Wave (Y)
+                const y = params.ampY * Math.cos(prop);
+                
+                // Horizontal Wave (Z) with Phase Shift
+                const z = params.ampZ * Math.cos(prop + phi);
+
+                // Update BufferAttributes
+                // Wave Y
+                waveY.positions[i * 3] = x;
+                waveY.positions[i * 3 + 1] = y;
+                waveY.positions[i * 3 + 2] = 0;
+
+                // Wave Z
+                waveZ.positions[i * 3] = x;
+                waveZ.positions[i * 3 + 1] = 0;
+                waveZ.positions[i * 3 + 2] = z;
+
+                // Resultant
+                waveResult.positions[i * 3] = x;
+                waveResult.positions[i * 3 + 1] = y;
+                waveResult.positions[i * 3 + 2] = z;
+            }
+
+            // Flag updates
+            waveY.mesh.geometry.attributes.position.needsUpdate = true;
+            waveZ.mesh.geometry.attributes.position.needsUpdate = true;
+            waveResult.mesh.geometry.attributes.position.needsUpdate = true;
+
+            // --- Update Vectors at the Projection Plane ---
+            // Calculate field at x = projectionPlane.position.x
+            const xPlane = projectionPlane.position.x;
+            const propPlane = k * xPlane - w * time;
+            
+            const Ey = params.ampY * Math.cos(propPlane);
+            const Ez = params.ampZ * Math.cos(propPlane + phi);
+            
+            // Move vector group to plane
+            vectorGroup.position.x = xPlane;
+
+            // Update Y Arrow
+            const vY = new THREE.Vector3(0, Ey, 0);
+            if (vY.length() > 0.01) {
+                arrowHelperY.setDirection(vY.clone().normalize());
+                arrowHelperY.setLength(vY.length());
+                arrowHelperY.visible = true;
+            } else { arrowHelperY.visible = false; }
+
+            // Update Z Arrow
+            const vZ = new THREE.Vector3(0, 0, Ez);
+            if (vZ.length() > 0.01) {
+                arrowHelperZ.setDirection(vZ.clone().normalize());
+                arrowHelperZ.setLength(vZ.length());
+                arrowHelperZ.visible = true;
+            } else { arrowHelperZ.visible = false; }
+
+            // Update Resultant Arrow
+            const vR = new THREE.Vector3(0, Ey, Ez);
+            if (vR.length() > 0.01) {
+                arrowHelperR.setDirection(vR.clone().normalize());
+                arrowHelperR.setLength(vR.length());
+                arrowHelperR.visible = true;
+            } else { arrowHelperR.visible = false; }
+
+            // --- Update Trace on the Projection Plane ---
+            // We draw the tip of the Resultant vector (0, Ey, Ez)
+            // Shift array
+            for (let i = (trailSize - 1) * 3; i >= 3; i--) {
+                trailPos[i] = trailPos[i-3];
+            }
+            // Add new point (Local coordinates to the plane)
+            // Plane is rotated Y=90. Local X is World Z. Local Y is World Y.
+            trailPos[0] = 0; // Flat on plane
+            trailPos[1] = Ey;
+            trailPos[2] = Ez;
+
+            trailLine.geometry.attributes.position.needsUpdate = true;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = clock.getElapsedTime() * 0.5; // Slow down slightly
+            updateWave(time);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // --- UI Logic ---
+        const phaseInput = document.getElementById('phase');
+        const ampYInput = document.getElementById('ampY');
+        const ampZInput = document.getElementById('ampZ');
+        const phaseVal = document.getElementById('phaseVal');
+        const ampYVal = document.getElementById('ampYVal');
+        const ampZVal = document.getElementById('ampZVal');
+
+        function updateParams() {
+            params.phaseShift = parseFloat(phaseInput.value);
+            params.ampY = parseFloat(ampYInput.value);
+            params.ampZ = parseFloat(ampZInput.value);
+            
+            phaseVal.innerText = params.phaseShift;
+            ampYVal.innerText = params.ampY;
+            ampZVal.innerText = params.ampZ;
+        }
+
+        [phaseInput, ampYInput, ampZInput].forEach(el => el.addEventListener('input', updateParams));
+
+        window.setPreset = function(type) {
+            if (type === 'linear') {
+                phaseInput.value = 0;
+                ampYInput.value = 1.5;
+                ampZInput.value = 1.5; // 45 degree linear
+            } else if (type === 'circular') {
+                phaseInput.value = 90;
+                ampYInput.value = 1.5;
+                ampZInput.value = 1.5;
+            } else if (type === 'elliptical') {
+                phaseInput.value = 45;
+                ampYInput.value = 1.5;
+                ampZInput.value = 0.8;
+            }
+            updateParams();
+        };
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Initialize preset
+        setPreset('linear');
+        animate();
+
+    </script>
+</body>
+</html>
